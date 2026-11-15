@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Upload Audio Jadi Teks - Whisper AI</title>
+<style>
+*{box-sizing:border-box;font-family:'Segoe UI',Arial,sans-serif}
+body{margin:0;background:#0f172a;color:#fff;min-height:100vh;display:flex;justify-content:center;padding:16px}
+.card{background:#1e293b;width:100%;max-width:700px;border-radius:20px;padding:22px}
+h1{margin:0 0 4px;font-size:22px}
+p{color:#94a3b8;font-size:13px;margin:0 0 14px}
+.drop{border:2px dashed #475569;border-radius:16px;padding:28px 16px;text-align:center;background:#0f172a;cursor:pointer}
+.drop:hover{border-color:#22c55e}
+.drop b{font-size:16px}
+.drop span{color:#94a3b8;font-size:12px;display:block;margin-top:6px}
+audio{width:100%;margin-top:12px}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+select,button{padding:12px 14px;border-radius:12px;border:none;font-weight:700;font-size:14px;cursor:pointer}
+select{flex:1;background:#0f172a;color:#fff;border:1px solid #334155}
+.btn-main{background:#22c55e;color:#fff;flex:2}
+.btn-main:disabled{background:#475569}
+.btn-sec{background:#334155;color:#fff;flex:1}
+#status{font-size:13px;padding:10px 12px;border-radius:10px;background:#0f172a;border:1px solid #334155;margin-bottom:10px}
+#progressBar{height:8px;background:#334155;border-radius:99px;overflow:hidden;display:none}
+#progressBar div{height:100%;background:#22c55e;width:0%;transition:.3s}
+textarea{width:100%;min-height:280px;background:#0f172a;color:#fff;border:1px solid #334155;border-radius:14px;padding:14px;font-size:16px;line-height:1.6;resize:vertical}
+small{color:#94a3b8;display:block;text-align:center;margin-top:12px;line-height:1.5}
+.file-info{font-size:13px;color:#a7f3d0;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🎧 Upload Audio Jadi Teks</h1>
+  <p>Upload file MP3 / WAV / M4A / OGG / rekaman WA. AI Whisper akan ubah jadi teks. 100% di HP/laptop kamu.</p>
+
+  <div id="status">📥 Silahkan upload audio dulu.</div>
+  <div id="progressBar"><div id="progressFill"></div></div>
+
+  <div class="drop" id="dropZone">
+    <div style="font-size:40px">📁</div>
+    <b>Klik untuk Pilih Audio</b>
+    <span>atau drag & drop file ke sini<br>MP3, WAV, M4A, OGG, WEBM - Max 25MB (disarankan < 5 menit)</span>
+    <input type="file" id="fileInput" accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm,.mp4" hidden>
+  </div>
+  <div class="file-info" id="fileInfo"></div>
+  <audio id="audioPlayer" controls style="display:none"></audio>
+
+  <div class="row">
+    <select id="lang">
+      <option value="indonesian" selected>🇮🇩 Bahasa Indonesia</option>
+      <option value="english">🇺🇸 English</option>
+      <option value="malay">🇲🇾 Melayu</option>
+      <option value="auto">🌐 Auto Deteksi</option>
+    </select>
+    <button id="transcribeBtn" class="btn-main" disabled>✨ UBAH JADI TEKS</button>
+  </div>
+
+  <div class="row">
+    <button class="btn-sec" onclick="copyText()">📋 Salin</button>
+    <button class="btn-sec" onclick="downloadText()">⬇ Download .txt</button>
+    <button class="btn-sec" onclick="clearAll()">🗑 Hapus</button>
+  </div>
+
+  <textarea id="hasil" placeholder="Hasil teks akan muncul di sini...&#10;&#10;Pertama kali akan download model AI ~40MB, tunggu sampai 100% ya. Kedua kali langsung cepat."></textarea>
+
+  <small>Harus pakai Chrome / Edge & Internet untuk pertama kali (download model).<br>Audio tidak dikirim ke server, diproses di perangkat kamu.<br>Tips: Audio jernih & tidak ada musik = hasil 95% akurat.</small>
+</div>
+
+<script type="module">
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js";
+env.allowLocalModels = false;
+env.backends.onnx.wasm.numThreads = 1;
+
+let audioBuffer = null, fileName = "audio";
+let transcriber = null;
+const statusEl = document.getElementById('status');
+const progressBar = document.getElementById('progressBar');
+const progressFill = document.getElementById('progressFill');
+const transcribeBtn = document.getElementById('transcribeBtn');
+const fileInput = document.getElementById('fileInput');
+const dropZone = document.getElementById('dropZone');
+const audioPlayer = document.getElementById('audioPlayer');
+const hasilEl = document.getElementById('hasil');
+const fileInfo = document.getElementById('fileInfo');
+
+dropZone.onclick = ()=> fileInput.click();
+dropZone.ondragover = e=>{e.preventDefault(); dropZone.style.borderColor="#22c55e"};
+dropZone.ondrop = e=>{e.preventDefault(); handleFile(e.dataTransfer.files[0])};
+fileInput.onchange = e=> handleFile(e.target.files[0]);
+
+async function handleFile(file){
+  if(!file) return;
+  if(file.size > 25*1024*1024){ alert("File terlalu besar >25MB. Potong dulu ya!"); return; }
+  fileName = file.name.replace(/\.[^/.]+$/,"");
+  fileInfo.textContent = `📄 ${file.name} • ${(file.size/1024/1024).toFixed(2)} MB`;
+  statusEl.textContent = "⏳ Membaca audio...";
+  const url = URL.createObjectURL(file);
+  audioPlayer.src = url; audioPlayer.style.display="block";
+  try{
+    const arrayBuffer = await file.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+    // Convert to 16kHz mono for Whisper
+    const targetRate = 16000;
+    const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration*targetRate), targetRate);
+    const src = offline.createBufferSource(); src.buffer = decoded; src.connect(offline.destination); src.start();
+    const rendered = await offline.startRendering();
+    audioBuffer = rendered.getChannelData(0);
+    statusEl.textContent = `✅ Siap! Durasi ${(decoded.duration/60).toFixed(1)} menit. Klik UBAH JADI TEKS.`;
+    transcribeBtn.disabled = false;
+  }catch(err){ statusEl.textContent = "❌ Gagal baca audio: "+err.message; }
+}
+
+transcribeBtn.onclick = async ()=>{
+  if(!audioBuffer) return;
+  transcribeBtn.disabled = true;
+  transcribeBtn.textContent = "⏳ MEMPROSES...";
+  progressBar.style.display="block";
+  try{
+    if(!transcriber){
+      statusEl.textContent = "⬇ Download Model AI Whisper (40MB) pertama kali, mohon tunggu...";
+      transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
+        quantized: true,
+        progress_callback: (data)=>{
+          if(data.status==="progress"){ let p = Math.round(data.progress); progressFill.style.width = p+"%"; statusEl.textContent = `⬇ Download Model ${p}% - ${data.file}`; }
+        }
+      });
+    }
+    statusEl.textContent = "🤖 AI sedang mendengarkan & mengetik... Sabar ya, bisa 30 detik - 2 menit.";
+    progressFill.style.width = "70%";
+    const lang = document.getElementById('lang').value;
+    const output = await transcriber(audioBuffer, {
+      chunk_length_s: 30, stride_length_s: 5,
+      language: lang==="auto" ? undefined : lang,
+      task: "transcribe",
+      return_timestamps: false
+    });
+    let text = output.text.trim();
+    // Capitalize first letter
+    text = text.charAt(0).toUpperCase()+text.slice(1);
+    hasilEl.value = text;
+    statusEl.textContent = "✅ Selesai! Teks sudah jadi. Bisa disalin / download.";
+    progressFill.style.width = "100%";
+  }catch(e){ statusEl.textContent = "❌ Error: "+e.message; }
+  transcribeBtn.disabled = false;
+  transcribeBtn.textContent = "✨ UBAH JADI TEKS";
+};
+
+window.copyText = ()=>{ hasilEl.select(); navigator.clipboard.writeText(hasilEl.value); alert("Tersalin!"); };
+window.downloadText = ()=>{
+  let blob = new Blob([hasilEl.value], {type:"text/plain"});
+  let a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fileName+"-hasil-teks.txt"; a.click();
+};
+window.clearAll = ()=>{ if(confirm("Hapus semua?")){ hasilEl.value=""; fileInput.value=""; audioPlayer.style.display="none"; fileInfo.textContent=""; transcribeBtn.disabled=true; } };
+</script>
+</body>
+</html>
